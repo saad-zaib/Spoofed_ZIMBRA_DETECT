@@ -50,24 +50,12 @@ class EmailSpooferLogger:
         
         # Write to JSON file with proper locking to handle concurrency
         try:
-            # Read existing entries if file exists
-            entries = []
-            if os.path.exists(self.log_path) and os.path.getsize(self.log_path) > 0:
-                with open(self.log_path, 'r') as f:
-                    try:
-                        entries = json.load(f)
-                        if not isinstance(entries, list):
-                            entries = [entries]
-                    except json.JSONDecodeError:
-                        # If file is corrupted, start fresh
-                        entries = []
+            # Convert the entry to a compact JSON string
+            json_string = json.dumps(json_entry, separators=(',', ':'))
             
-            # Add new entry
-            entries.append(json_entry)
-            
-            # Write back to file
-            with open(self.log_path, 'w') as f:
-                json.dump(entries, f, indent=2)
+            # Append the entry to the file as a new line (JSONL format)
+            with open(self.log_path, 'a') as f:
+                f.write(json_string + '\n')
                 
             self.logger.info(f"Logged spoofed email to {self.log_path}: {json_entry['sender']} -> {json_entry['receiver']}")
             
