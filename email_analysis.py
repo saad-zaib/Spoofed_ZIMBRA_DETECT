@@ -7,9 +7,9 @@ import dns.resolver
 from file_handling import extract_email_headers
 from logger import log_spoofed_email
 from zimbra_operations import (
-    extract_email_info, search_specific_email, create_tag, 
-    check_if_email_already_tagged, add_to_spoofed_tag, get_message_timestamps,
-    search_most_recent_email
+    extract_email_info, search_specific_email, create_tag,
+    check_if_email_already_tagged, add_tag_to_email,
+    get_message_timestamps, search_most_recent_email
 )
 
 def check_spoofing(msg):
@@ -26,14 +26,14 @@ def check_spoofing(msg):
     spoofing_detected = False
     source_ip = None
     recipient = None
-    
+
     # Create email_data dictionary to store all details
     email_data = {
         'from': from_header,
         'return_path': return_path,
         'subject': subject
     }
-    
+
     # Try to extract recipient from To field
     to_header = msg.get('To', '')
     to_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+)', to_header)
@@ -117,7 +117,7 @@ def check_spoofing(msg):
         print("SPOOFING DETECTED: One or more security checks failed")
     else:
         print("All security checks passed, no spoofing detected")
-    
+
     # Add remaining fields to email_data
     email_data.update({
         'spf_pass': spf_pass,
@@ -127,7 +127,7 @@ def check_spoofing(msg):
         'header_mismatch': header_mismatch,
         'spoofing_detected': spoofing_detected
     })
-    
+
     # Log email data if spoofing is detected
     if spoofing_detected:
         log_spoofed_email(email_data)
@@ -187,7 +187,7 @@ def process_email(email_path, processed_emails):
             print(f"Tagging email for mailbox: {mailbox}")
 
             # Make sure the SPOOFED tag exists
-            if create_tag(mailbox):
+            if create_tag(mailbox, "SPOOFED"):
                 # Search for the specific email using precise criteria
                 message_id = search_specific_email(mailbox, email_info)
 

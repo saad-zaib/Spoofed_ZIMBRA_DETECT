@@ -322,30 +322,30 @@ def process_email_file(file_path: Path) -> Dict[str, Any]:
         with open(file_path, 'rb') as f:
             file_data = f.read()
             msg = email.message_from_bytes(file_data)
-        
+
         # Extract email info for tagging
         email_info = extract_email_info(str(file_path), msg)
-        
+
         malicious_attachments = []
-        
+
         # Check for attachments
         for part in msg.walk():
             if part.get_content_maintype() == 'multipart':
                 continue
-            
+
             filename = part.get_filename()
             is_attachment = filename or (part.get('Content-Disposition') and 'attachment' in part.get('Content-Disposition'))
-            
+
             if is_attachment:
                 if part.get('Content-Transfer-Encoding') == 'base64':
                     attachment_data = base64.b64decode(part.get_payload())
                 else:
                     attachment_data = part.get_payload(decode=True)
-                
+
                 file_hash = calculate_file_hash(attachment_data)
                 log_entry = f"Filename: {filename}, Hash: {file_hash}, Path: {file_path}"
                 attachment_logger.info(log_entry)
-                
+
                 if check_hash_malicious(file_hash):
                     malicious_entry = f"[MALICIOUS] {filename} - Hash: {file_hash} - Email: {file_path}"
                     malicious_logger.info(malicious_entry)
@@ -356,17 +356,17 @@ def process_email_file(file_path: Path) -> Dict[str, Any]:
                     })
                 else:
                     print(f"[CLEAN] {filename} - Hash: {file_hash}")
-        
+
         if email_info:
             email_info['malicious_attachments'] = malicious_attachments
             email_info['has_malicious_content'] = len(malicious_attachments) > 0
-            
+
         return email_info
-        
+
     except Exception as e:
         logging.error(f"Error processing {file_path}: {str(e)}")
         return None
-    
+
 def scan_directory(processed_files: Set[str]) -> Set[str]:
     """Scan directory and return set of new files."""
     current_files = set()
@@ -381,32 +381,32 @@ def tag_email_with_malicious_content(email_info):
     """Tag an email as malicious in Zimbra."""
     if not email_info or not email_info.get('has_malicious_content'):
         return False
-    
+
     mailbox = email_info.get('mailbox')
     if not mailbox:
         print("No mailbox information available for tagging")
         return False
-    
+
     # Create the MALICIOUS tag if it doesn't exist
     if not create_tag(mailbox, MALICIOUS_TAG):
         print(f"Failed to create {MALICIOUS_TAG} tag for {mailbox}")
         return False
-    
+
     # Search for the email in Zimbra
     message_id = search_specific_email(mailbox, email_info)
     if not message_id:
         print(f"Could not find email in Zimbra for {mailbox}")
         return False
-    
+
     # Add the tag to the email
     if add_tag_to_email(mailbox, message_id, MALICIOUS_TAG):
         print(f"Successfully tagged email with {MALICIOUS_TAG} tag in Zimbra")
-        
+
         # Log detailed information about the malicious content
         malicious_attachments = email_info.get('malicious_attachments', [])
         for attachment in malicious_attachments:
             malicious_logger.info(f"Tagged message with ID {message_id} - Malicious attachment: {attachment['filename']} - Hash: {attachment['hash']}")
-        
+
         return True
     else:
         print(f"Failed to tag email with {MALICIOUS_TAG} tag in Zimbra")
@@ -432,23 +432,23 @@ def monitor_directory():
     """Continuously monitor directory for new files and process them."""
     print(f"Monitoring {ZIMBRA_PATH} for new emails...")
     processed_files = set()
-    
+
     try:
         while True:
             # Scan for new email files
             new_files = scan_directory(processed_files)
-            
+
             for file_path in new_files:
                 path_obj = Path(file_path)
                 print(f"Processing new email: {path_obj}")
-                
+
                 # Process the email to check for malicious attachments
                 email_info = process_email_file(path_obj)
-                
+
                 # If the email has malicious content, tag it in Zimbra
                 if email_info and email_info.get('has_malicious_content'):
                     tag_email_with_malicious_content(email_info)
-                    
+
                     # Store information about the processed email
                     processed_emails[file_path] = {
                         'processed_timestamp': time.time(),
@@ -462,20 +462,20 @@ def monitor_directory():
                         'processed_timestamp': time.time(),
                         'has_malicious_content': False
                     }
-                
+
                 # Add to processed files set
                 processed_files.add(file_path)
-            
+
             # Clean up old entries periodically
             if len(processed_emails) > 1000:  # Arbitrary threshold
                 cleanup_processed_emails(processed_emails)
-                
+
             # Sleep to avoid excessive CPU usage
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         print("Monitoring stopped by user.")
-        
+
     except Exception as e:
         logging.error(f"Error in monitoring loop: {str(e)}")
         print(f"Fatal error in monitoring loop: {str(e)}")
@@ -485,9 +485,59 @@ if __name__ == "__main__":
         # Initialize logging
         print("Starting Zimbra Malicious Email Scanner...")
         logging.info("Starting Zimbra Malicious Email Scanner...")
-        
+
         # Start monitoring
         monitor_directory()
     except Exception as e:
         logging.error(f"Fatal error: {str(e)}")
         print(f"Fatal error: {str(e)}")
+
+def get_message_timestamps(mailbox, message_id):
+    """Get the received timestamp for a message."""
+    command = f"su - zimbra -c \"zmmailbox -z -m {mailbox} gm {message_id}\""
+    output = run_zimbra_command(command)
+
+    if not output:
+        return None
+
+    # Try to extract date from the output
+    received_date = None
+    date_match = re.search(r'Date:\s+(.*?)(?:\n|$)', output)
+    if date_match:
+        received_date = date_match.group(1).strip()
+
+    return received_date
+
+def search_most_recent_email(mailbox, from_address=None, subject=None):
+    """Search for the most recent email matching the criteria."""
+    search_criteria = []
+
+    if from_address:
+        # Clean up the from address for the search query
+        clean_from = from_address.replace('<', '').replace('>', '')
+        clean_from = clean_from.replace('"', '\\"')
+        search_criteria.append(f'from:"{clean_from}"')
+
+    if subject:
+        # Escape special characters in subject
+        clean_subject = subject.replace('"', '\\"')
+        search_criteria.append(f'subject:"{clean_subject}"')
+
+    # Add a time constraint to get recent emails
+    search_criteria.append('after:-7day')
+
+    # Build the search query
+    search_query = " ".join(search_criteria)
+    command = f'su - zimbra -c "zmmailbox -z -m {mailbox} s -t message \'{search_query}\'"'
+
+    print(f"Searching with fallback criteria: {search_query}")
+    output = run_zimbra_command(command)
+
+    # Extract message IDs from the search results
+    message_ids = extract_all_message_ids(output) if output else []
+
+    # Return the first (most recent) message ID if any were found
+    if message_ids:
+        return message_ids[0]
+
+    return None
